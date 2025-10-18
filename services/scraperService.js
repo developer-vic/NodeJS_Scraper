@@ -2,10 +2,36 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const { getRandomProxy, parseProxy } = require('../proxies');
 
 class ScraperService {
     constructor() {
         this.browser = null;
+    }
+
+    /**
+     * Launch browser with random proxy
+     * @returns {Object} - Puppeteer browser instance with proxy info
+     */
+    async launchBrowserWithProxy() {
+        const proxyString = getRandomProxy();
+        const { ip, port, username, password } = parseProxy(proxyString);
+        
+        console.log(`🌐 Using proxy: ${ip}:${port}`);
+        
+        const browser = await puppeteer.launch({
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                `--proxy-server=${ip}:${port}`
+            ]
+        });
+
+        // Store proxy credentials for later use
+        browser._proxyCredentials = { username, password };
+
+        return browser;
     }
 
     /**
@@ -46,14 +72,17 @@ class ScraperService {
         try {
             // Initialize browser and page once for all pages
             if (!this.browser) {
-                console.log('🚀 Launching headless browser for Clutch.co scraping...');
-                this.browser = await puppeteer.launch({
-                    headless: 'new',
-                    args: ['--no-sandbox', '--disable-setuid-sandbox']
-                });
+                console.log('🚀 Launching headless browser with proxy for Clutch.co scraping...');
+                this.browser = await this.launchBrowserWithProxy();
             }
 
             page = await this.browser.newPage();
+            
+            // Set up proxy authentication if credentials are available
+            if (this.browser._proxyCredentials) {
+                await page.authenticate(this.browser._proxyCredentials);
+            }
+            
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
 
             for (let currentPage = startPage; currentPage <= endPage; currentPage++) {
@@ -92,11 +121,14 @@ class ScraperService {
                     
                     // Launch fresh browser for next page
                     console.log('🚀 Launching fresh browser for next page...');
-                    this.browser = await puppeteer.launch({
-                        headless: 'new',
-                        args: ['--no-sandbox', '--disable-setuid-sandbox']
-                    });
+                    this.browser = await this.launchBrowserWithProxy();
                     page = await this.browser.newPage();
+                    
+                    // Set up proxy authentication if credentials are available
+                    if (this.browser._proxyCredentials) {
+                        await page.authenticate(this.browser._proxyCredentials);
+                    }
+                    
                     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
                 }
             }
@@ -214,8 +246,9 @@ class ScraperService {
             try {
                 if (page) {
                     const debugContent = await page.content();
-                    fs.writeFileSync(`debug_${Date.now()}.html`, debugContent);
-                    console.log('🐛 Debug HTML saved for troubleshooting');
+                    const fileName = `debug_${Date.now()}.html`;
+                    fs.writeFileSync(fileName, debugContent);
+                    console.log(`🐛 Debug HTML saved for troubleshooting at ${fileName}`);
                 }
             } catch (debugError) {
                 console.warn('Could not save debug HTML:', debugError.message);
